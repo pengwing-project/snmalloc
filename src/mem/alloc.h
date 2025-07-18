@@ -521,12 +521,13 @@ namespace snmalloc
 
       void clear()
       {
+        head.non_atomic_next = nullptr;
         last = &head;
       }
 
       bool empty()
       {
-        return last == &head;
+        return (last == &head) && (head.non_atomic_next == nullptr);
       }
     };
 
@@ -551,13 +552,19 @@ namespace snmalloc
       {
         this->size += sizeclass_to_size(sizeclass);
 
-        Remote* r = (Remote*)p;
+        assert(p != nullptr);
+        assert(reinterpret_cast<uintptr_t>(p) % alignof(Remote) == 0);
+
+        Remote* r = static_cast<Remote*>(p);
         r->set_target_id(target_id);
         assert(r->target_id() == target_id);
+        // r->next = nullptr;
 
         RemoteList* l = &list[get_slot(target_id, 0)];
         l->last->non_atomic_next = r;
         l->last = r;
+        l->last->non_atomic_next = nullptr;
+        std::atomic_thread_fence(std::memory_order_release);
       }
 
       void post(alloc_id_t id)
@@ -583,7 +590,10 @@ namespace snmalloc
             {
               // Send all slots to the target at the head of the list.
               Superslab* super = Superslab::get(first);
-              super->get_allocator()->message_queue.enqueue(first, l->last);
+              // super->get_allocator()->message_queue.enqueue(first, l->last);
+              while (super->get_allocator()->message_bbq.emplace(first))
+                ;
+              // std::cout << first << '\n';
               l->clear();
             }
           }
@@ -596,7 +606,7 @@ namespace snmalloc
           // so take copy of the head, mark the last element,
           // and clear the original list.
           Remote* r = resend->head.non_atomic_next;
-          resend->last->non_atomic_next = nullptr;
+          // resend->last->non_atomic_next = nullptr;
           resend->clear();
 
           post_round++;
@@ -611,6 +621,7 @@ namespace snmalloc
             l->last = r;
 
             r = r->non_atomic_next;
+            l->last->non_atomic_next = nullptr;
           }
         }
       }
@@ -623,7 +634,7 @@ namespace snmalloc
     DLList<Superslab> super_only_short_available;
 
     RemoteCache remote;
-    Remote stub;
+    // Remote stub;
 
     std::conditional_t<IsQueueInline, RemoteAllocator, RemoteAllocator*>
       remote_alloc;
@@ -665,11 +676,14 @@ namespace snmalloc
       return public_state()->id();
     }
 
+  public:
     auto& message_queue()
     {
-      return public_state()->message_queue;
+      // return public_state()->message_queue;
+      return public_state()->message_bbq;
     }
 
+  private:
     template<class A, class MemProvider>
     friend class Pool;
 
@@ -691,8 +705,8 @@ namespace snmalloc
       if (id() >= (alloc_id_t)-1)
         error("Id should not be -1");
 
-      init_message_queue();
-      message_queue().invariant();
+      // init_message_queue();
+      // message_queue().invariant();
 
 #ifndef NDEBUG
       for (uint8_t i = 0; i < NUM_SIZECLASSES; i++)
@@ -731,56 +745,62 @@ namespace snmalloc
 
     void init_message_queue()
     {
-      message_queue().init(&stub);
+      // message_queue().init(&stub);
     }
 
     void handle_dealloc_remote(Remote* p)
     {
-      if (p != &stub)
+      // if (p != &stub)
+      //{
+      Superslab* super = Superslab::get(p);
+      // assert(super != nullptr);
+      if (super->get_kind() == Super)
       {
-        Superslab* super = Superslab::get(p);
-
-        if (super->get_kind() == Super)
+        Slab* slab = Slab::get(p);
+        Metaslab& meta = super->get_meta(slab);
+        if (p->target_id() == id())
         {
-          Slab* slab = Slab::get(p);
-          Metaslab& meta = super->get_meta(slab);
-          if (p->target_id() == id())
-          {
-            small_dealloc_offseted(super, p, meta.sizeclass);
-          }
-          else
-          {
-            // Queue for remote dealloc elsewhere.
-            remote.dealloc(p->target_id(), p, meta.sizeclass);
-          }
+          small_dealloc_offseted(super, p, meta.sizeclass);
         }
         else
         {
-          Mediumslab* slab = Mediumslab::get(p);
-          if (p->target_id() == id())
-          {
-            uint8_t sizeclass = slab->get_sizeclass();
-            void* start = remove_cache_friendly_offset(p, sizeclass);
-            medium_dealloc(slab, start, sizeclass);
-          }
-          else
-          {
-            // Queue for remote dealloc elsewhere.
-            remote.dealloc(p->target_id(), p, slab->get_sizeclass());
-          }
+          // Queue for remote dealloc elsewhere.
+          remote.dealloc(p->target_id(), p, meta.sizeclass);
         }
       }
+      else
+      {
+        Mediumslab* slab = Mediumslab::get(p);
+        if (p->target_id() == id())
+        {
+          uint8_t sizeclass = slab->get_sizeclass();
+          void* start = remove_cache_friendly_offset(p, sizeclass);
+          medium_dealloc(slab, start, sizeclass);
+        }
+        else
+        {
+          // Queue for remote dealloc elsewhere.
+          remote.dealloc(p->target_id(), p, slab->get_sizeclass());
+        }
+      }
+      //}
     }
 
     NOINLINE void handle_message_queue_inner()
     {
       for (size_t i = 0; i < REMOTE_BATCH; i++)
       {
-        Remote* r = message_queue().dequeue();
-
-        if (r == nullptr)
-          break;
-
+        // Remote* r = message_queue().dequeue();
+        Remote* r{};
+        Queuestatus st{};
+        while ((st = message_queue().front(r)) != Queuestatus::OK)
+        {
+          if (st == Queuestatus::EMPTY)
+            return;
+        }
+        // if (r == nullptr)
+        //   break;
+        assert(r != nullptr);
         handle_dealloc_remote(r);
       }
 
@@ -795,8 +815,8 @@ namespace snmalloc
     inline void handle_message_queue()
     {
       // Inline the empty check, but not necessarily the full queue handling.
-      if (message_queue().is_empty())
-        return;
+      // if (message_queue().is_empty())
+      //   return;
 
       handle_message_queue_inner();
     }
@@ -825,29 +845,25 @@ namespace snmalloc
     {
       switch (super->get_status())
       {
-        case Superslab::Full:
-        {
+        case Superslab::Full: {
           // Remove from the list of superslabs that have available slabs.
           super_available.remove(super);
           break;
         }
 
-        case Superslab::Available:
-        {
+        case Superslab::Available: {
           // Do nothing.
           break;
         }
 
-        case Superslab::OnlyShortSlabAvailable:
-        {
+        case Superslab::OnlyShortSlabAvailable: {
           // Move from the general list to the short slab only list.
           super_available.remove(super);
           super_only_short_available.insert(super);
           break;
         }
 
-        case Superslab::Empty:
-        {
+        case Superslab::Empty: {
           // Can't be empty since we just allocated.
           error("Unreachable");
           break;
@@ -963,14 +979,12 @@ namespace snmalloc
 
       switch (super->get_status())
       {
-        case Superslab::Full:
-        {
+        case Superslab::Full: {
           error("Unreachable");
           break;
         }
 
-        case Superslab::Available:
-        {
+        case Superslab::Available: {
           if (was_full)
           {
             super_available.insert(super);
@@ -983,14 +997,12 @@ namespace snmalloc
           break;
         }
 
-        case Superslab::OnlyShortSlabAvailable:
-        {
+        case Superslab::OnlyShortSlabAvailable: {
           super_only_short_available.insert(super);
           break;
         }
 
-        case Superslab::Empty:
-        {
+        case Superslab::Empty: {
           super_available.remove(super);
 
           if constexpr (decommit_strategy == DecommitSuper)

@@ -3,6 +3,7 @@
 #include "../ds/mpscq.h"
 #include "../mem/allocconfig.h"
 #include "../mem/sizeclass.h"
+#include "ds/message_bbq.h"
 
 #include <atomic>
 
@@ -17,7 +18,11 @@ namespace snmalloc
       Remote* non_atomic_next;
     };
 
-    alloc_id_t allocator_id;
+    union
+    {
+      alloc_id_t allocator_id;
+      alloc_id_t value;
+    };
 
     void set_target_id(alloc_id_t id)
     {
@@ -39,12 +44,13 @@ namespace snmalloc
     using alloc_id_t = Remote::alloc_id_t;
     // Store the message queue on a separate cacheline. It is mutable data that
     // is read by other threads.
-    alignas(CACHELINE_SIZE) MPSCQ<Remote> message_queue;
+    // alignas(CACHELINE_SIZE) MPSCQ<Remote> message_queue;
+    alignas(CACHELINE_SIZE) batchedBBQ_MPSC<Remote*, 16, 512> message_bbq;
 
     alloc_id_t id()
     {
-      return static_cast<alloc_id_t>(
-        reinterpret_cast<uintptr_t>(&message_queue));
+      return static_cast<alloc_id_t>(reinterpret_cast<uintptr_t>(&message_bbq));
     }
   };
+  using Queuestatus = batchedBBQ_MPSC<Remote*, 16, 512>::Queuestatus;
 }

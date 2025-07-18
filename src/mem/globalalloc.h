@@ -2,6 +2,7 @@
 
 #include "../ds/helpers.h"
 #include "alloc.h"
+#include "mem/remoteallocator.h"
 #include "pool.h"
 
 namespace snmalloc
@@ -111,22 +112,36 @@ namespace snmalloc
         while (alloc != nullptr)
         {
           // Destroy the message queue so that it has no stub message.
-          Remote* p = alloc->message_queue().destroy();
-
-          while (p != nullptr)
+          // Remote* p = alloc->message_queue().destroy();
+          Remote* p{};
+          Queuestatus st{};
+          while (true)
           {
-            Remote* next = p->non_atomic_next;
+            st = alloc->message_queue().front(p);
+            if (st == Queuestatus::EMPTY)
+              break;
+            if (st == Queuestatus::BUSY)
+              continue;
+            // OK
+            assert(p != nullptr);
             alloc->handle_dealloc_remote(p);
-            p = next;
           }
 
+          // while (p != nullptr)
+          //{
+          //   Remote* next = p->non_atomic_next;
+          //   alloc->handle_dealloc_remote(p);
+          //   p = next;
+          // }
+
           // Place the static stub message on the queue.
-          alloc->init_message_queue();
+          // alloc->init_message_queue();
 
           // Post all remotes, including forwarded ones. If any allocator posts,
           // repeat the loop.
           if (alloc->remote.size > 0)
           {
+            // std::cout << "size not 0\n";
             alloc->stats().remote_post();
             alloc->remote.post(alloc->id());
             done = false;
@@ -141,12 +156,16 @@ namespace snmalloc
 
       while (alloc != nullptr)
       {
-        // Check that the allocator has freed all memory.
+        // std::cout << "calling " << alloc->get_id() << '\n';
+        //  Check that the allocator has freed all memory.
         if (alloc->stats().is_empty())
+        {
           empty_count++;
+        }
 
         alloc = Parent::iterate(alloc);
       }
+      // std::cout << alloc_count << ' ' << empty_count;
 
       if (alloc_count != empty_count)
         error("Incorrect number of allocators");
