@@ -1,5 +1,8 @@
 #pragma once
 
+#include <snmalloc/ds_core/bits.h>
+#include <snmalloc/ds_core/mitigations.h>
+
 namespace snmalloc
 {
   // 0 intermediate bits results in power of 2 small allocs. 1 intermediate

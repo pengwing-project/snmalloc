@@ -35,7 +35,7 @@ namespace snmalloc
      * then the `RemoteAllocator` must be separately allocated and provided
      * to the `Allocator` before it is used.
      */
-    bool IsQueueInline = true;
+    bool IsQueueInline = true; // false;
 
     /**
      * Does the `Allocator` own a `Backend::LocalState` object?  If this is
@@ -67,6 +67,10 @@ namespace snmalloc
      * (on dealloc and in freelists) otherwise a no-op version is provided.
      */
     bool HasDomesticate = false;
+
+    // const uint32_t block_num = 16;
+    // const uint32_t block_size = 4096;
+    ;
   };
 
   struct NoClientMetaDataProvider
@@ -117,7 +121,7 @@ namespace snmalloc
      * path.
      */
     SNMALLOC_REQUIRE_CONSTINIT
-    inline static RemoteAllocator unused_remote;
+    inline static RemoteAllocator unused_remote{};
   };
 
   template<typename PAL>

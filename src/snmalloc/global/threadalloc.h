@@ -1,5 +1,7 @@
 #pragma once
 
+#include "snmalloc/ds_core/defines.h"
+
 #if defined(SNMALLOC_EXTERNAL_THREAD_ALLOC)
 #  define SNMALLOC_THREAD_TEARDOWN_DEFINED
 #endif
@@ -84,10 +86,12 @@ namespace snmalloc
    */
   class ThreadAlloc
   {
-    SNMALLOC_REQUIRE_CONSTINIT static const inline Alloc default_alloc{true};
+    SNMALLOC_REQUIRE_CONSTINIT
+    //  static const inline Alloc default_alloc{true};
+    static inline Alloc default_alloc{true}; // out of .rodata
 
-    SNMALLOC_REQUIRE_CONSTINIT static inline thread_local Alloc* alloc{
-      const_cast<Alloc*>(&default_alloc)};
+    SNMALLOC_REQUIRE_CONSTINIT
+    static inline thread_local Alloc* alloc{const_cast<Alloc*>(&default_alloc)};
 
     // As allocation and deallocation can occur during thread teardown
     // we need to record if we are already in that state as we will not
@@ -105,6 +109,10 @@ namespace snmalloc
      */
     static SNMALLOC_FAST_PATH Alloc& get()
     {
+      // if (alloc == &default_alloc)
+      //{
+      //   alloc = AllocPool<Config>::acquire();
+      // }
       return *alloc;
     }
 

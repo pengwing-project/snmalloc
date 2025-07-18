@@ -323,11 +323,50 @@ namespace snmalloc
               auto domesticate_nop = [](freelist::QueuePtr p) {
                 return freelist::HeadPtr::unsafe_from(p.unsafe_ptr());
               };
-              remote->enqueue(first, last, domesticate_nop);
+
+#if defined(__SNMALLOC_USE_BBQ__)
+              MessageQueueStatus st{};
+              while (
+                (st =
+#endif
+                   remote->enqueue(first, last, domesticate_nop)
+
+#if defined(__SNMALLOC_USE_BBQ__)
+                   ))
+              {
+                if (SNMALLOC_UNLIKELY(st == MessageQueueStatus::FULL))
+                {
+#  ifdef SNMALLOC_TRACING
+                  message<1024>(
+                    "message_queue(bbq) is full now, waiting for dequeue...");
+#  endif
+                }
+              };
+#endif
+              ;
             }
             else
             {
-              remote->enqueue(first, last, domesticate);
+#if defined(__SNMALLOC_USE_BBQ__)
+              MessageQueueStatus st{};
+              while (
+                (st =
+#endif
+                   remote->enqueue(first, last, domesticate)
+
+#if defined(__SNMALLOC_USE_BBQ__)
+                   ))
+              {
+                if (SNMALLOC_UNLIKELY(st == MessageQueueStatus::FULL))
+                {
+#  ifdef SNMALLOC_TRACING
+                  message<1024>(
+                    "message_queue(bbq) is full now, waiting for dequeue...");
+#  endif
+                }
+              };
+#endif
+              ;
             }
             sent_something = true;
           }

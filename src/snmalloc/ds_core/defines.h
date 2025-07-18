@@ -50,7 +50,7 @@
 #  define SNMALLOC_COLD __attribute__((cold))
 #  define SNMALLOC_UNUSED_FUNCTION __attribute((unused))
 #  define SNMALLOC_USED_FUNCTION __attribute((used))
-#  ifdef __clang__
+#  if defined(__clang__) && __cplusplus >= 202002L
 #    define SNMALLOC_REQUIRE_CONSTINIT \
       [[clang::require_constant_initialization]]
 #  else
@@ -117,10 +117,13 @@
 
 namespace snmalloc
 {
+
 #ifdef NDEBUG
   static constexpr bool Debug = false;
 #else
   static constexpr bool Debug = true;
+#  define DEBUG
+// #  define _DEBUG
 #endif
 
   // Forwards reference so that the platform can define how to handle errors.

@@ -80,7 +80,8 @@ void test_tasks_f(size_t id)
   for (size_t n = 0; n < swapcount; n++)
   {
     size_t size = 16 + (r.next() % 1024);
-    size_t* res = (size_t*)(use_malloc ? malloc(size) : snmalloc::alloc(size));
+    size_t* res =
+      static_cast<size_t*>(use_malloc ? malloc(size) : snmalloc::alloc(size));
 
     if (res != nullptr)
     {

@@ -6,7 +6,8 @@
  * Do not use as is.
  */
 
-#ifdef SNMALLOC_THREAD_SANITIZER_ENABLED
+#if defined(SNMALLOC_THREAD_SANITIZER_ENABLED) || \
+  defined(SNMALLOC_THREAD_MEMORY_ENABLED)
 int main()
 {
   return 0;
