@@ -393,5 +393,31 @@ namespace snmalloc
     {
       return t1 > t2 ? t1 : t2;
     }
+
+    // https://graphics.stanford.edu/~seander/bithacks.html
+    SNMALLOC_FAST_PATH constexpr static uint32_t log2_inner(unsigned int v)
+    {
+      unsigned int r{};
+      unsigned int shift{};
+
+      r = static_cast<unsigned int>(v > 0xFFFF) << 4;
+      v >>= r;
+      shift = static_cast<unsigned int>(v > 0xFF) << 3;
+      v >>= shift;
+      r |= shift;
+      shift = static_cast<unsigned int>(v > 0xF) << 2;
+      v >>= shift;
+      r |= shift;
+      shift = static_cast<unsigned int>(v > 0x3) << 1;
+      v >>= shift;
+      r |= shift;
+      r |= (v >> 1);
+      return r;
+    }
+
+    constexpr static inline unsigned int log2(unsigned int v)
+    {
+      return log2_inner(v) + (v & (v - 1) ? 1 : 0);
+    }
   } // namespace bits
 } // namespace snmalloc

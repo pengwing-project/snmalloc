@@ -18,5 +18,10 @@ namespace snmalloc
 
     using AtomicBool = std::atomic<bool>;
     using MemoryOrder = std::memory_order;
+
+    template<typename T>
+    using is_always_lock_free = typename std::atomic<T>::is_always_lock_free;
+
+    inline void (*atomic_thread_fence)(MemoryOrder) = &std::atomic_thread_fence;
   } // namespace stl
 } // namespace snmalloc

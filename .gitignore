@@ -24,3 +24,7 @@
 
 # cache dirs
 .cache
+#pdf
+*.pdf 
+compile_commands.json
+*.log

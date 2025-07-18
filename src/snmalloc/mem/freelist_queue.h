@@ -2,6 +2,7 @@
 
 #include "../ds/ds.h"
 #include "freelist.h"
+#include "snmalloc/mem/metadata.h"
 #include "snmalloc/stl/atomic.h"
 
 namespace snmalloc

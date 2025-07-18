@@ -8,7 +8,8 @@
 // enabled.
 #if defined(__linux__) && !__has_feature(address_sanitizer) && \
   !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__) && \
-  !defined(SNMALLOC_THREAD_SANITIZER_ENABLED)
+  !defined(SNMALLOC_THREAD_SANITIZER_ENABLED) && \
+  !defined(SNMALLOC_UNDEFINED_MEMORY_ENABLED)
 #  define RUN_TEST
 #endif
 

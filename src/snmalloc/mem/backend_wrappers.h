@@ -9,6 +9,7 @@
  */
 
 #include "../ds_core/ds_core.h"
+#include "backend_concept.h"
 
 namespace snmalloc
 {

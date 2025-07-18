@@ -78,6 +78,11 @@ jobs:
             build-type: Release
             extra-cmake-flags: "-DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_FLAGS=-stdlib=libstdc++"
             build-only: yes
+          # with the orignal queue rather than bbq
+          - os: "ubuntu-24.04"
+            variant: "BBQ OFF"
+            build-type: Debug
+            extra-cmake-flags: "-DSNMALLOC_USE_BBQ=OFF"
       # Don't abort runners if a single one fails
       fail-fast: false
     runs-on: ${{ matrix.os }}
@@ -99,7 +104,7 @@ jobs:
     - name: Test
       if: ${{ matrix.build-only != 'yes' }}
       working-directory: ${{github.workspace}}/build
-      run: ctest --output-on-failure -j 4 -C ${{ matrix.build-type }} --timeout 400
+      run: ctest --output-on-failure -V -j 4 -C ${{ matrix.build-type }} --timeout 400
     - name: Selfhost
       if: ${{ matrix.self-host }}
       working-directory: ${{github.workspace}}/build
@@ -415,10 +420,12 @@ jobs:
           - os: windows-2022
             build-type: Release
             arch: Win32
+            extra-cmake-flags: -DSNMALLOC_USE_BBQ=OFF
             toolchain: ""
           - os: windows-2022
             build-type: Debug
             arch: Win32
+            extra-cmake-flags: -DSNMALLOC_USE_BBQ=OFF
             toolchain: ""
           - os: windows-2022
             build-type: Release

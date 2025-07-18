@@ -12,6 +12,8 @@ include(CheckIncludeFileCXX)
 include(CheckIPOSupported)
 include(CMakeDependentOption)
 
+option(SNMALLOC_USE_BBQ "Use BBQ based message queue in snmalloc" ON)
+
 # Name chosen for compatibility with CTest.
 option(SNMALLOC_BUILD_TESTING "Build test programs as well as shims" ON)
 
@@ -31,6 +33,7 @@ option(SNMALLOC_ENABLE_WAIT_ON_ADDRESS "Use wait on address backoff strategy if 
 option(SNMALLOC_ENABLE_FUZZING "Enable fuzzing instrumentation tests" OFF)
 option(SNMALLOC_USE_SELF_VENDORED_STL "Avoid using system STL" OFF)
 # Options that apply only if we're not building the header-only library
+option(TEST_BBQ_CHECK_ENTRIES "Enable element checking test for BBQs" ON)
 cmake_dependent_option(SNMALLOC_RUST_SUPPORT "Build static library for rust" OFF "NOT SNMALLOC_HEADER_ONLY_LIBRARY" OFF)
 cmake_dependent_option(SNMALLOC_RUST_LIBC_API "Include libc API in the rust library" OFF "SNMALLOC_RUST_SUPPORT" OFF)
 cmake_dependent_option(SNMALLOC_STATIC_LIBRARY "Build static libraries" ON "NOT SNMALLOC_HEADER_ONLY_LIBRARY" OFF)
@@ -58,6 +61,7 @@ if (NOT SNMALLOC_HEADER_ONLY_LIBRARY)
 
   set(SNMALLOC_STATIC_LIBRARY_PREFIX "sn_" CACHE STRING "Static library function prefix")
   set(SNMALLOC_COMPILER_SUPPORT_IPO FALSE)
+
 else ()
   unset(SNMALLOC_STATIC_LIBRARY_PREFIX CACHE)
   unset(SNMALLOC_CLEANUP CACHE)
@@ -67,7 +71,7 @@ if (NOT SNMALLOC_CLEANUP STREQUAL CXX11_DESTRUCTORS)
   set(CMAKE_CXX_IMPLICIT_LINK_LIBRARIES "")
 endif()
 
-set(SNMALLOC_SANITIZER "" CACHE STRING "Use sanitizer type (undefined|thread|...)")
+set(SNMALLOC_SANITIZER "" CACHE STRING "Use sanitizer type (undefined|thread|memory|address|...)")
 if (SNMALLOC_SANITIZER)
   message(STATUS "Using sanitizer=${SNMALLOC_SANITIZER}")
 endif()
@@ -216,7 +220,7 @@ function(clangformat_targets)
   # tool.  It does not work with older versions as AfterCaseLabel is not supported
   # in earlier versions.
   find_program(CLANG_FORMAT NAMES
-    clang-format150 clang-format-15)
+    clang-format150 clang-format-15 clang-format)
 
   # If we've found a clang-format tool, generate a target for it, otherwise emit
   # a warning.
@@ -306,6 +310,11 @@ if (WIN32)
   message(STATUS "snmalloc: Avoiding Windows 10 APIs is ${WIN8COMPAT}")
 endif()
 
+if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+  set(SNMALLOC_USE_BBQ OFF CACHE BOOL "Disable BBQ on 32-bit Windows" FORCE)
+  message(STATUS "snmalloc: BBQ disabled for 32-bit Windows build")
+endif()
+
 # Detect support for cmpxchg16b; Werror is needed to make sure mcx16 must be used by targets
 check_cxx_compiler_flag("-Werror -Wextra -Wall -mcx16" SNMALLOC_COMPILER_SUPPORT_MCX16)
 if(SNMALLOC_COMPILER_SUPPORT_MCX16)
@@ -330,6 +339,10 @@ function(add_as_define_value KEY)
   endif ()
 endfunction()
 
+if(SNMALLOC_USE_BBQ)
+  target_compile_definitions(snmalloc INTERFACE __SNMALLOC_USE_BBQ__)
+  message(STATUS "snmalloc: Using BBQ based message queue")
+endif()
 add_as_define(SNMALLOC_QEMU_WORKAROUND)
 add_as_define(SNMALLOC_TRACING)
 add_as_define(SNMALLOC_CI_BUILD)
@@ -389,6 +402,7 @@ endfunction()
 # To build with just the header library target define SNMALLOC_HEADER_ONLY_LIBRARY
 if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
 
+  add_as_define(TEST_BBQ_CHECK_ENTRIES)
   function(subdirlist result curdir)
     file(GLOB children CONFIGURE_DEPENDS LIST_DIRECTORIES true RELATIVE ${curdir} ${curdir}/* )
     set(dirlist "")
@@ -432,6 +446,10 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
           target_link_libraries(${TESTNAME} -fsanitize=${SNMALLOC_SANITIZER})
           if (${SNMALLOC_SANITIZER} MATCHES "thread")
             target_compile_definitions(${TESTNAME} PRIVATE SNMALLOC_THREAD_SANITIZER_ENABLED)
+          elseif(${SNMALLOC_SANITIZER} MATCHES "memory")
+            target_compile_definitions(${TESTNAME} PRIVATE SNMALLOC_MEMORY_MEMORY_ENABLED)
+          elseif(${SNMALLOC_SANITIZER} MATCHES "undefined")
+            target_compile_definitions(${TESTNAME} PRIVATE SNMALLOC_UNDEFINED_MEMORY_ENABLED)
           endif()
         endif()
 

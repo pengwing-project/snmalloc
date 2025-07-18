@@ -48,6 +48,15 @@ namespace snmalloc
        * microarchitecture.
        */
     }
+
+#if defined(SNMALLOC_VA_BITS_64)
+    static inline uint64_t tick()
+    {
+      uint64_t c;
+      asm volatile("rdcycle %0" : "=r"(c));
+      return c;
+    }
+#endif
   };
 
   using AAL_Arch = AAL_RISCV;

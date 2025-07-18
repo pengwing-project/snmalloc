@@ -1,10 +1,16 @@
 #pragma once
-
-#include "freelist_queue.h"
+#include "snmalloc/mem/backend_concept.h"
+#include "snmalloc/stl/atomic.h"
+#ifdef __SNMALLOC_USE_BBQ__
+#  include "message_bbq.h"
+#else
+#  include "freelist_queue.h"
+#endif
 #include "snmalloc/stl/new.h"
 
 namespace snmalloc
 {
+
   class RemoteMessageAssertions;
 
   /**
@@ -124,7 +130,7 @@ namespace snmalloc
        * authmap to reconstruct an in-bounds version, which we then immediately
        * bound and rewild and then domesticate (how strange).
        *
-       * XXX See above re: doing better on CHERI.
+       * XXX See above re: doing betterpreamble-cfa29f.pch on CHERI.
        */
       auto next = domesticate(
         capptr_rewild(
@@ -289,6 +295,7 @@ namespace snmalloc
    * pointer domestication may be necessary.  See the documentation for
    * FreeListMPSCQ for details.
    */
+
   struct RemoteAllocator
   {
     /**
@@ -301,7 +308,15 @@ namespace snmalloc
      */
     inline static FreeListKey key_global{0xdeadbeef, 0xbeefdead, 0xdeadbeef};
 
-    FreeListMPSCQ<key_global> list;
+#if defined(__SNMALLOC_USE_BBQ__)
+    inline const static size_t block_num = 8;
+    inline const static size_t block_size = 4096;
+    batchedBBQ_MPSC<block_num, block_size, &key_global> message_queue{};
+    using BBQstatus =
+      typename batchedBBQ_MPSC<block_num, block_size, &key_global>::Queuestatus;
+#else
+    FreeListMPSCQ<key_global> list{};
+#endif
 
     using alloc_id_t = address_t;
 
@@ -309,14 +324,21 @@ namespace snmalloc
 
     void invariant()
     {
-      list.invariant();
+#if defined(__SNMALLOC_USE_BBQ__)
+      message_queue
+#else
+      list
+#endif
+        .invariant();
     }
-
+#if !defined(__SNMALLOC_USE_BBQ__)
     void init()
     {
       list.init();
     }
+#endif
 
+#if !defined(__SNMALLOC_USE_BBQ__)
     template<typename Domesticator_queue, typename Cb>
     void destroy_and_iterate(Domesticator_queue domesticate, Cb cb)
     {
@@ -332,6 +354,23 @@ namespace snmalloc
       return list.can_dequeue();
     }
 
+#else
+    /*to preserve API completeness, see commentary in batchedbbq */
+    inline bool is_empty()
+    {
+      return message_queue.is_empty();
+    }
+#endif
+
+#if defined(__SNMALLOC_USE_BBQ__)
+    /* get dequeue status, we need it for alloc(core) to know the dequeue status
+     * of last turn
+
+     * it is atomic due to lazy-initialization of allocators, otherwise, TSAN
+        will complain
+     */
+    stl::Atomic<BBQstatus> status{BBQstatus::BUSY};
+#endif
     /**
      * Pushes a list of messages to the queue. Each message from first to
      * last should be linked together through their next pointers.
@@ -340,15 +379,24 @@ namespace snmalloc
      * the commentary on the class.
      */
     template<typename Domesticator_head>
-    void enqueue(
+#if defined(__SNMALLOC_USE_BBQ__)
+    BBQstatus
+#else
+    void
+#endif
+    enqueue(
       capptr::Alloc<RemoteMessage> first,
       capptr::Alloc<RemoteMessage> last,
       Domesticator_head domesticate_head)
     {
-      list.enqueue(
-        RemoteMessage::to_message_link(first),
-        RemoteMessage::to_message_link(last),
-        domesticate_head);
+#if defined(__SNMALLOC_USE_BBQ__)
+      return message_queue.emplace
+#else
+      list.enqueue
+#endif
+        (RemoteMessage::to_message_link(first),
+         RemoteMessage::to_message_link(last),
+         domesticate_head);
     }
 
     /**
@@ -363,7 +411,12 @@ namespace snmalloc
       typename Domesticator_head,
       typename Domesticator_queue,
       typename Cb>
-    void dequeue(
+#if defined(__SNMALLOC_USE_BBQ__)
+    BBQstatus
+#else
+    void
+#endif
+    dequeue(
       Domesticator_head domesticate_head,
       Domesticator_queue domesticate_queue,
       Cb cb)
@@ -371,7 +424,25 @@ namespace snmalloc
       auto cbwrap = [cb](freelist::HeadPtr p) SNMALLOC_FAST_PATH_LAMBDA {
         return cb(RemoteMessage::from_message_link(p));
       };
-      list.dequeue(domesticate_head, domesticate_queue, cbwrap);
+#if defined(__SNMALLOC_USE_BBQ__)
+      status.store(
+        message_queue.template front<
+          Domesticator_head,
+          Domesticator_queue,
+          decltype(cbwrap),
+          false>
+#else
+      list.dequeue
+#endif
+        (domesticate_head, domesticate_queue, cbwrap)
+
+#if defined(__SNMALLOC_USE_BBQ__)
+          ,
+        stl::memory_order_release);
+      return status.load(stl::memory_order_acquire);
+#else
+        ;
+#endif
     }
 
     alloc_id_t trunc_id()
@@ -379,4 +450,8 @@ namespace snmalloc
       return address_cast(this);
     }
   };
+
+#if defined(__SNMALLOC_USE_BBQ__)
+  using MessageQueueStatus = typename RemoteAllocator::BBQstatus;
+#endif
 } // namespace snmalloc

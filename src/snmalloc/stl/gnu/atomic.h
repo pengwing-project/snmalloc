@@ -89,11 +89,17 @@ namespace snmalloc
         return load();
       }
 
-      SNMALLOC_FAST_PATH T load(MemoryOrder mem_ord = MemoryOrder::SEQ_CST)
+      SNMALLOC_FAST_PATH T
+      load(MemoryOrder mem_ord = MemoryOrder::SEQ_CST) const noexcept
       {
-        T res;
-        __atomic_load(addressof(val), addressof(res), order(mem_ord));
-        return res;
+        // T res;
+        // __atomic_load(addressof(val), addressof(res), order(mem_ord));
+        // return res;
+
+        alignas(T) unsigned char buf[sizeof(T)];
+        T* res = reinterpret_cast<T*>(buf);
+        __atomic_load(__builtin_addressof(val), res, order(mem_ord));
+        return *res;
       }
 
       // Atomic store.
@@ -241,8 +247,16 @@ namespace snmalloc
         return __atomic_sub_fetch(
           addressof(val), decrement, order(MemoryOrder::SEQ_CST));
       }
+
+      static constexpr bool is_always_lock_free =
+        __atomic_always_lock_free(sizeof(T), nullptr);
     };
 
     using AtomicBool = Atomic<bool>;
+
+    inline void atomic_thread_fence(MemoryOrder __m) noexcept
+    {
+      __atomic_thread_fence(int(__m));
+    }
   } // namespace stl
 } // namespace snmalloc

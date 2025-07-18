@@ -7,6 +7,7 @@
 #include "pool.h"
 #include "remotecache.h"
 #include "sizeclasstable.h"
+#include "snmalloc/mem/remoteallocator.h"
 #include "snmalloc/stl/new.h"
 #include "ticker.h"
 
@@ -149,6 +150,10 @@ namespace snmalloc
      */
     LocalEntropy entropy;
 
+    // #if defined(__SNMALLOC_USE_BBQ__)
+    //     mutable MessageQueueStatus st{MessageQueueStatus::BUSY};
+    // #endif
+
     /**
      * Message queue for allocations being returned to this
      * allocator
@@ -157,7 +162,7 @@ namespace snmalloc
       Config::Options.IsQueueInline,
       RemoteAllocator,
       RemoteAllocator*>
-      remote_alloc;
+      remote_alloc{};
 
     /**
      * The type used local state.  This is defined by the back end.
@@ -187,7 +192,7 @@ namespace snmalloc
      * In the cross trust domain version this is the minimum amount
      * of allocator state that must be accessible to other threads.
      */
-    auto* public_state()
+    SNMALLOC_FAST_PATH auto* public_state()
     {
       if constexpr (Config::Options.IsQueueInline)
       {
@@ -233,11 +238,12 @@ namespace snmalloc
      * Abstracts access to the message queue to handle different
      * layout configurations of the allocator.
      */
-    auto& message_queue()
+    SNMALLOC_FAST_PATH auto& message_queue()
     {
       return *public_state();
     }
 
+#if !defined(__SNMALLOC_USE_BBQ__)
     /**
      * Check if this allocator has messages to deallocate blocks from another
      * thread
@@ -246,6 +252,7 @@ namespace snmalloc
     {
       return message_queue().can_dequeue();
     }
+#endif
 
     /**
      * Initialiser, shared code between the constructors for different
@@ -405,11 +412,20 @@ namespace snmalloc
     SNMALLOC_FAST_PATH decltype(auto)
     handle_message_queue(Action action, Args... args) noexcept(noexc)
     {
+#if !defined(__SNMALLOC_USE_BBQ__)
       // Inline the empty check, but not necessarily the full queue handling.
       if (SNMALLOC_LIKELY(!has_messages()))
       {
         return action(args...);
       }
+#else
+      /* we could also early return the handling routine, but there's little
+       * benefit for bbq due to overhead caused by memory accessing*/
+      // if (SNMALLOC_LIKELY(message_queue().is_empty()))
+      //{
+      //   return action(args...);
+      // }
+#endif
 
       return handle_message_queue_slow<noexc>(action, args...);
     }
@@ -418,7 +434,7 @@ namespace snmalloc
      * Process remote frees into this allocator.
      */
     template<bool noexc, typename Action, typename... Args>
-    SNMALLOC_SLOW_PATH decltype(auto)
+    SNMALLOC_FAST_PATH decltype(auto)
     handle_message_queue_slow(Action action, Args... args) noexcept(noexc)
     {
       bool need_post = false;
@@ -439,7 +455,6 @@ namespace snmalloc
 #ifdef SNMALLOC_TRACING
       message<1024>("Handling remote queue before proceeding...");
 #endif
-
       if constexpr (Config::Options.QueueHeadsAreTame)
       {
         /*
@@ -450,11 +465,39 @@ namespace snmalloc
           [](freelist::QueuePtr p) SNMALLOC_FAST_PATH_LAMBDA {
             return freelist::HeadPtr::unsafe_from(p.unsafe_ptr());
           };
-        message_queue().dequeue(domesticate_first, domesticate, cb);
+#if defined(__SNMALLOC_USE_BBQ__)
+        while ((
+#endif
+          message_queue().dequeue(domesticate_first, domesticate, cb)
+#if defined(__SNMALLOC_USE_BBQ__)
+            ))
+        {
+          if (SNMALLOC_LIKELY(
+                message_queue().status == MessageQueueStatus::EMPTY))
+          {
+            return action(args...);
+          }
+        }
+#endif
+        ;
       }
       else
       {
-        message_queue().dequeue(domesticate, domesticate, cb);
+#if defined(__SNMALLOC_USE_BBQ__)
+        while ((
+#endif
+          message_queue().dequeue(domesticate, domesticate, cb)
+#if defined(__SNMALLOC_USE_BBQ__)
+            ))
+        {
+          if (SNMALLOC_LIKELY(
+                message_queue().status == MessageQueueStatus::EMPTY))
+          {
+            return action(args...);
+          }
+        }
+#endif
+        ;
       }
 
       if (need_post)
@@ -1382,16 +1425,42 @@ namespace snmalloc
               Config::Backend::get_metaentry(snmalloc::address_cast(m));
             handle_dealloc_remote(
               entry, m, need_post, domesticate, bytes_flushed);
+#if defined(__SNMALLOC_USE_BBQ__)
+            return true;
+#endif
           };
 
+#if defined(__SNMALLOC_USE_BBQ__)
+        MessageQueueStatus st{};
+        while ((st = message_queue().dequeue(domesticate, domesticate, cb)))
+        {
+          if (st == MessageQueueStatus::EMPTY)
+          {
+            break;
+          }
+        }
+#else
         message_queue().destroy_and_iterate(domesticate, cb);
+#endif
       }
       else
       {
-        // Process incoming message queue
-        // Loop as normally only processes a batch
+// Process incoming message queue
+// Loop as normally only processes a batch
+#if defined(__SNMALLOC_USE_BBQ__)
+        while (true)
+        {
+          handle_message_queue<true>([](){});
+          // handle_message_queue_slow<true>([](){});
+          if (message_queue().status == MessageQueueStatus::EMPTY)
+          {
+            break;
+          }
+        }
+#else
         while (has_messages())
-          handle_message_queue<true>([]() {});
+          handle_message_queue<true>([](){});
+#endif
       }
 
       auto& key = freelist::Object::key_root;
