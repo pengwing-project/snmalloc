@@ -351,7 +351,8 @@ namespace snmalloc
     Queuestatus enq([[maybe_unused]] T data)
     {
     again:
-      Block& blk = blocks_[phead.load().meta.ptr];
+      MetaHead ph = phead.load();
+      Block& blk = blocks_[ph.meta.ptr];
       MetaCursor cursor{};
       switch (allocate_entry(blk, cursor))
       {
@@ -366,7 +367,7 @@ namespace snmalloc
           blk.committed.fetch_add(1);
           return Queuestatus::OK;
         case (Blockstate::BLOCK_DONE):
-          switch (advance_phead(phead))
+          switch (advance_phead(ph))
           {
             case Blockstate::NO_ENTRY:
               return Queuestatus::FULL;
@@ -385,7 +386,8 @@ namespace snmalloc
     Queuestatus deq([[maybe_unused]] T& data)
     {
     again:
-      Block& blk = blocks_[chead.load().meta.ptr];
+      MetaHead ch = chead.load();
+      Block& blk = blocks_[ch.meta.ptr];
       MetaCursor cursor{};
       switch (reserve_entry(blk, cursor))
       {
@@ -430,7 +432,7 @@ namespace snmalloc
           return Queuestatus::BUSY;
         case Blockstate::BLOCK_DONE:
         {
-          if (advance_chead(chead, cursor))
+          if (advance_chead(ch, cursor))
           {
             goto again;
           }
@@ -552,17 +554,17 @@ namespace snmalloc
       return Blockstate::BLOCK_DONE;
     }
 
-    SNMALLOC_FAST_PATH Blockstate advance_phead(const Head& ph)
+    SNMALLOC_FAST_PATH Blockstate advance_phead(const MetaHead& head)
     {
-      MetaHead head = ph.load();
-      /*there should be a pre-check before advancing phead, which is not
-       * metioned in the paper's description, otherwise it will cause some
-       * potential `false advancing` in muli producer, low I/O contention
-       * scenario */
-      if (blocks_[head.meta.ptr].allocated.load().meta.ptr < block_size)
-      {
-        return Blockstate::SUCCESS;
-      }
+      // MetaHead head = ph.load();
+      ///*there should be a pre-check before advancing phead, which is not
+      // * metioned in the paper's description, otherwise it will cause some
+      // * potential `false advancing` in muli producer, low I/O contention
+      // * scenario */
+      // if (blocks_[head.meta.ptr].allocated.load().meta.ptr < block_size)
+      //{
+      //  return Blockstate::SUCCESS;
+      //}
       Block& nextblock = blocks_[(head.meta.ptr + 1) % block_num];
 #if defined(RETRY_NEW)
       MetaCursor consumed = nextblock.consumed.load();
@@ -596,18 +598,18 @@ namespace snmalloc
       return Blockstate::SUCCESS;
     }
 
-    SNMALLOC_FAST_PATH bool
-    advance_chead(const Head& ch, [[maybe_unused]] const MetaCursor& cursor)
+    SNMALLOC_FAST_PATH bool advance_chead(
+      const MetaHead& head, [[maybe_unused]] const MetaCursor& cursor)
     {
-      MetaHead head = ch.load();
-      /*there should be a pre-check before advancing phead, which is not
-       * metioned in the paper's description, otherwise it will cause some
-       * potential `false advancing` in muli consumer, low I/O contention
-       * scenario */
-      if (blocks_[head.meta.ptr].reserved.load().meta.ptr < block_size)
-      {
-        return true;
-      }
+      // MetaHead head = ch.load();
+      ///*there should be a pre-check before advancing phead, which is not
+      // * metioned in the paper's description, otherwise it will cause some
+      // * potential `false advancing` in muli consumer, low I/O contention
+      // * scenario */
+      // if (blocks_[head.meta.ptr].reserved.load().meta.ptr < block_size)
+      //{
+      //  return true;
+      //}
       Block& nextblock = blocks_[(head.meta.ptr + 1) % block_num];
       MetaCursor committed = nextblock.committed.load();
 #if defined(RETRY_NEW)

@@ -148,7 +148,7 @@ namespace snmalloc
           return Queuestatus::BUSY;
         case Blockstate::BLOCK_DONE:
         {
-          if (this->advance_chead(this->chead, cursor))
+          if (this->advance_chead(this->chead.load(), cursor))
           {
             goto again;
           }
