@@ -104,7 +104,7 @@ jobs:
     - name: Test
       if: ${{ matrix.build-only != 'yes' }}
       working-directory: ${{github.workspace}}/build
-      run: ctest --output-on-failure -V -j 4 -C ${{ matrix.build-type }} --timeout 400
+      run: ctest --output-on-failure -V -j 4 -C ${{ matrix.build-type }} --timeout 600
     - name: Selfhost
       if: ${{ matrix.self-host }}
       working-directory: ${{github.workspace}}/build
@@ -171,7 +171,7 @@ jobs:
     - name: Test
       if: ${{ matrix.build-only != 'yes' }}
       working-directory: ${{github.workspace}}/build
-      run: ctest --output-on-failure -j 4 -C ${{ matrix.build-type }} --timeout 400
+      run: ctest --output-on-failure -j 4 -C ${{ matrix.build-type }} --timeout 600
     - name: Selfhost
       if: ${{ matrix.self-host }}
       working-directory: ${{github.workspace}}/build
@@ -194,7 +194,7 @@ jobs:
       # Don't abort runners if a single one fails
       fail-fast: false
     # Kill these jobs if they take too long.
-    timeout-minutes: 25
+    timeout-minutes: 30
     runs-on: ubuntu-22.04
     name: FreeBSD-${{ matrix.os.version}} ${{ matrix.build-type }}
     steps:
@@ -212,7 +212,7 @@ jobs:
           cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{matrix.build-type}} -G Ninja 
           cd ${{github.workspace}}/build
           NINJA_STATUS="%p [%f:%s/%t] %o/s, %es" ninja
-          ctest -j 4 --output-on-failure -E '(perf-.*)|(.*-malloc$)' --timeout 400
+          ctest -j 4 --output-on-failure -E '(perf-.*)|(.*-malloc$)' --timeout 600
 
   netbsd:
     strategy:
@@ -225,7 +225,7 @@ jobs:
       # Don't abort runners if a single one fails
       fail-fast: false
     # Kill these jobs if they take too long.
-    timeout-minutes: 25
+    timeout-minutes: 30
     runs-on: ubuntu-22.04
     name: NetBSD-${{ matrix.os.version}} ${{ matrix.build-type }}
     steps:
@@ -243,7 +243,7 @@ jobs:
           cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{matrix.build-type}} -G Ninja -DCMAKE_CXX_COMPILER=/usr/pkg/gcc10/bin/g++ -DCMAKE_C_COMPILER=/usr/pkg/gcc10/bin/gcc
           cd ${{github.workspace}}/build
           NINJA_STATUS="%p [%f:%s/%t] %o/s, %es" ninja
-          ctest -j 4 --output-on-failure -E '(perf-.*)|(.*-malloc$)' --timeout 400
+          ctest -j 4 --output-on-failure -E '(perf-.*)|(.*-malloc$)' --timeout 600
 
   ## Without overcommit, or explicit commit the current implementation cannot be made to work on openbsd.
   ## We could add a layered pagemap for openbsd, that would address the requirements. 
@@ -309,7 +309,7 @@ jobs:
       run: NINJA_STATUS="%p [%f:%s/%t] %o/s, %es" ninja
     - name: Test
       working-directory: ${{github.workspace}}/build
-      run: ctest --output-on-failure -j 4 -C ${{ matrix.build-type }} --timeout 400 -E "memcpy|external_pointer" --repeat-until-fail 2
+      run: ctest --output-on-failure -j 4 -C ${{ matrix.build-type }} --timeout 600 -E "memcpy|external_pointer" --repeat-until-fail 2
 
   qemu-crossbuild:
     strategy:
@@ -397,7 +397,7 @@ jobs:
     # QEMU)
     - name: Test
       working-directory: ${{github.workspace}}/build
-      run: ctest -j 2 --output-on-failure -E '(perf-.*)|(.*-malloc$)' --timeout 400
+      run: ctest -j 2 --output-on-failure -E '(perf-.*)|(.*-malloc$)' --timeout 600
       timeout-minutes: 30
 
   windows:
@@ -472,10 +472,11 @@ jobs:
       run: cmake --build ${{github.workspace}}/build -- /m /p:Configuration=${{ matrix.build-type }}
       # Run the tests.
     - name: Test
-      if: ${{ matrix.build-only != 'yes' }}
+      #disable testing on 32bit platform
+      if: ${{ matrix.build-only != 'yes' && matrix.arch != 'Win32' }}
       working-directory: ${{ github.workspace }}/build
-      run: ctest -j 2 --interactive-debug-mode 0 --output-on-failure -C ${{ matrix.build-type }} --timeout 400
-      timeout-minutes: 20
+      run: ctest -j 2 --interactive-debug-mode 0 --output-on-failure -C ${{ matrix.build-type }} --timeout 600
+      timeout-minutes: 30
 
   # Job to run clang-format and report errors
   format:

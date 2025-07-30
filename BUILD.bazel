@@ -39,6 +39,7 @@ CMAKE_FLAGS = {
     "SNMALLOC_USE_SELF_VENDORED_STL": "OFF",
     "SNMALLOC_IPO": "ON",
     "USE_SNMALLOC_STATS": "ON",
+    "ENABLE_BBQ_VARIANT_PERF": "OFF",
 } | select({
     ":release_with_debug": {"CMAKE_BUILD_TYPE": "RelWithDebInfo"},
     ":release": {"CMAKE_BUILD_TYPE": "Release"},

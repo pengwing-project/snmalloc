@@ -28,3 +28,5 @@
 *.pdf 
 compile_commands.json
 *.log
+*.lock
+bazel*

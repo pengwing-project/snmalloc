@@ -18,8 +18,14 @@ namespace snmalloc
     FreeListKey* Key, // noticing that `Key` is passed by pointer here
     address_t Key_tweak,
     class T> // T is void*, see forward declaration commentary in bbq
-  class alignas(REMOTE_MIN_ALIGN) batchedBBQ_MPSC final
-  : public BBQ<freelist::QueuePtr, block_num, block_size, Key, Key_tweak>
+  class alignas(REMOTE_MIN_ALIGN) batchedBBQ_MPSC final : public BBQ<
+                                                            freelist::QueuePtr,
+                                                            block_num,
+                                                            block_size,
+                                                            false,
+                                                            true,
+                                                            Key,
+                                                            Key_tweak>
   {
     // static_assert(
     //   std::is_pointer<T>::value &&
@@ -30,9 +36,14 @@ namespace snmalloc
     //   T");
 
   public:
-    using
-      typename BBQ<freelist::QueuePtr, block_num, block_size, Key, Key_tweak>::
-        Queuestatus;
+    using typename BBQ<
+      freelist::QueuePtr,
+      block_num,
+      block_size,
+      false,
+      true,
+      Key,
+      Key_tweak>::Queuestatus;
 
     SNMALLOC_FAST_PATH void invariant()
     {
@@ -42,18 +53,38 @@ namespace snmalloc
     constexpr batchedBBQ_MPSC() = default;
 
   private:
-    using
-      typename BBQ<freelist::QueuePtr, block_num, block_size, Key, Key_tweak>::
-        MetaCursor;
-    using
-      typename BBQ<freelist::QueuePtr, block_num, block_size, Key, Key_tweak>::
-        MetaHead;
-    using
-      typename BBQ<freelist::QueuePtr, block_num, block_size, Key, Key_tweak>::
-        Blockstate;
-    using
-      typename BBQ<freelist::QueuePtr, block_num, block_size, Key, Key_tweak>::
-        Block;
+    using typename BBQ<
+      freelist::QueuePtr,
+      block_num,
+      block_size,
+      false,
+      true,
+      Key,
+      Key_tweak>::MetaCursor;
+    using typename BBQ<
+      freelist::QueuePtr,
+      block_num,
+      block_size,
+      false,
+      true,
+      Key,
+      Key_tweak>::MetaHead;
+    using typename BBQ<
+      freelist::QueuePtr,
+      block_num,
+      block_size,
+      false,
+      true,
+      Key,
+      Key_tweak>::Blockstate;
+    using typename BBQ<
+      freelist::QueuePtr,
+      block_num,
+      block_size,
+      false,
+      true,
+      Key,
+      Key_tweak>::Block;
 
   private:
     stl::conditional_t<stl::is_same_v<T, void*>, freelist::HeadPtr, T>
@@ -88,7 +119,7 @@ namespace snmalloc
     {
     again:
       invariant();
-      Block& blk = this->blocks_[this->chead.load().meta.ptr];
+      Block& blk = this->blocks_[this->chead.meta.ptr];
       MetaCursor cursor{};
       switch (reserve_entry(blk, cursor))
       {
@@ -122,7 +153,6 @@ namespace snmalloc
             consumed_current = next_ptr;
           }
           list_head = nullptr;
-          blk.reserved.fetch_add(1);
 #if defined(RETRY_NEW)
           blk.consumed.fetch_add(1);
           if constexpr (IsSingleList)
@@ -148,7 +178,7 @@ namespace snmalloc
           return Queuestatus::BUSY;
         case Blockstate::BLOCK_DONE:
         {
-          if (this->advance_chead(this->chead.load(), cursor))
+          if (this->advance_chead(this->chead, cursor))
           {
             goto again;
           }
@@ -195,13 +225,12 @@ namespace snmalloc
      * it'll introduce extra memory access overhead*/
     bool is_empty()
     {
-      MetaHead head = this->chead.load();
+      MetaHead head = this->chead;
       Block& blk = this->blocks_[head.meta.ptr];
-      MetaCursor reserved = blk.reserved.load();
       MetaCursor committed = blk.committed.load();
       if (
-        reserved.meta.ptr < block_size &&
-        reserved.meta.ptr != committed.meta.ptr)
+        committed.meta.ptr < block_size &&
+        committed.meta.ptr != committed.meta.ptr)
       {
         return false;
       }
@@ -352,11 +381,11 @@ namespace snmalloc
     /*overloaded */
     Blockstate reserve_entry(Block& blk, MetaCursor& cursor)
     {
-      MetaCursor reserved = blk.reserved.load();
-      if (reserved.meta.ptr < block_size)
+      MetaCursor consumed = blk.consumed.load();
+      if (consumed.meta.ptr < block_size)
       {
         MetaCursor committed = blk.committed.load();
-        if (reserved.meta.ptr == committed.meta.ptr)
+        if (consumed.meta.ptr == committed.meta.ptr)
         {
           return Blockstate::NO_ENTRY;
         }
@@ -369,19 +398,24 @@ namespace snmalloc
           }
         }
         {
-          cursor = reserved;
+          cursor = consumed;
           return Blockstate::RESERVED;
         }
       }
-      cursor = reserved;
+      cursor = consumed;
       return Blockstate::BLOCK_DONE;
     }
 
 #ifdef DEBUG
   public:
-    using batchedBBQLog =
-      typename BBQ<freelist::QueuePtr, block_num, block_size, Key, Key_tweak>::
-        BBQLog;
+    using batchedBBQLog = typename BBQ<
+      freelist::QueuePtr,
+      block_num,
+      block_size,
+      false,
+      true,
+      Key,
+      Key_tweak>::BBQLog;
 
 #endif
     // friend std::ostream& operator<<(

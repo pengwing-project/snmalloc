@@ -34,6 +34,8 @@ option(SNMALLOC_ENABLE_FUZZING "Enable fuzzing instrumentation tests" OFF)
 option(SNMALLOC_USE_SELF_VENDORED_STL "Avoid using system STL" OFF)
 # Options that apply only if we're not building the header-only library
 option(TEST_BBQ_CHECK_ENTRIES "Enable element checking test for BBQs" ON)
+option(ENABLE_BBQ_VARIANT_PERF "Enable bbq variant profiling" ON)
+
 cmake_dependent_option(SNMALLOC_RUST_SUPPORT "Build static library for rust" OFF "NOT SNMALLOC_HEADER_ONLY_LIBRARY" OFF)
 cmake_dependent_option(SNMALLOC_RUST_LIBC_API "Include libc API in the rust library" OFF "SNMALLOC_RUST_SUPPORT" OFF)
 cmake_dependent_option(SNMALLOC_STATIC_LIBRARY "Build static libraries" ON "NOT SNMALLOC_HEADER_ONLY_LIBRARY" OFF)
@@ -493,6 +495,18 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
     endforeach()
   endfunction()
 
+function(perf_bbq)
+if(ENABLE_BBQ_VARIANT_PERF)
+  set(BBQ_VARIANT_DIR ${CMAKE_BINARY_DIR}/perf_bbq_variant)
+  file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/src/test/perf/bbq/ DESTINATION ${CMAKE_BINARY_DIR}/perf_bbq_variant)
+  file(GLOB_RECURSE PERF_BBQ_SRC CONFIGURE_DEPENDS ${CMAKE_BINARY_DIR}/perf_bbq_variant/*.cc)
+  include_directories( ${CMAKE_SOURCE_DIR}/src )
+  add_executable(bbq_variant_perf ${PERF_BBQ_SRC})
+  target_link_libraries(bbq_variant_perf snmalloc)
+  target_compile_definitions(bbq_variant_perf PRIVATE "SNMALLOC_USE_${TEST_CLEANUP}")
+endif()
+endfunction()
+
   if(NOT (DEFINED SNMALLOC_LINKER_FLAVOUR) OR ("${SNMALLOC_LINKER_FLAVOUR}" MATCHES "^$"))
     # Linker not specified externally; probe to see if we can make lld work
     set(CMAKE_REQUIRED_LINK_OPTIONS -fuse-ld=lld -Wl,--icf=all)
@@ -632,6 +646,7 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
 
       make_tests(${FLAVOUR} ${DEFINES})
     endforeach()
+    perf_bbq()
   endif()
 
   if (SNMALLOC_BENCHMARK_INDIVIDUAL_MITIGATIONS)

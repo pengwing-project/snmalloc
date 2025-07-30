@@ -89,6 +89,8 @@ namespace snmalloc
     class T,
     uint32_t block_num = 8,
     uint32_t block_size = 15,
+    bool IsSingleProducer = false,
+    bool IsSingleConsumer = false,
     FreeListKey* Key = nullptr,
     address_t Key_tweak = NO_KEY_TWEAK>
   class BBQ
@@ -150,7 +152,7 @@ namespace snmalloc
     template<uint64_t pointer_bits>
     union MetaCtrl final
     {
-      struct final
+      struct
       {
 #if IS_LITTLE_ENDIAN
         uint64_t ptr : pointer_bits;
@@ -176,6 +178,11 @@ namespace snmalloc
       // }
 
       MetaCtrl(uint64_t raw) : val{raw} {}
+
+      constexpr void init(uint64_t init)
+      {
+        val = init;
+      }
     };
 
     template<uint64_t pointer_bits>
@@ -230,20 +237,70 @@ namespace snmalloc
     using MetaCursor = MetaCtrl<offset_bits>;
     using MetaHead = MetaCtrl<index_bits>;
 
-    struct alignas(CACHELINE_SIZE) Block
+    // template<bool IsSingleProd>
+    // struct Prod;
+
+    // template<bool IsSingleCons>
+    // struct Cons;
+
+    // template<>
+    // struct alignas(CACHELINE_SIZE) Prod<true>
+    // {
+    //   Cursor committed;
+
+    //   constexpr Prod() : committed() {}
+    // };
+
+    // template<>
+    // struct alignas(CACHELINE_SIZE) Prod<false>
+    // {
+    //   Cursor allocated, committed;
+
+    //   constexpr Prod() : allocated(), committed() {}
+    // };
+
+    // template<>
+    // struct alignas(CACHELINE_SIZE) Cons<true>
+    // {
+    //   Cursor consumed;
+
+    //   constexpr Cons() : consumed() {}
+    // };
+
+    // template<>
+    // struct alignas(CACHELINE_SIZE) Cons<false>
+    // {
+    //   Cursor reserved, consumed;
+
+    //   constexpr Cons() : reserved(), consumed() {}
+    // };
+
+    struct alignas(CACHELINE_SIZE)
+      Block //: public Prod<IsSingleProducer>, public Cons<IsSingleConsumer>
     {
+      alignas(CACHELINE_SIZE) Cursor committed{}, consumed{};
+      alignas(CACHELINE_SIZE)
+        stl::conditional_t<IsSingleProducer, void*, Cursor> allocated{};
+      alignas(CACHELINE_SIZE)
+        stl::conditional_t<IsSingleConsumer, void*, Cursor> reserved{};
+      // workaround for gnu cxx partial specification
       using PayloadEntry = maybe_atomic<T>;
       alignas(CACHELINE_SIZE) PayloadEntry payload[block_size]{};
 
-      Cursor allocated{}, committed{};
-      Cursor reserved{}, consumed{};
-
       constexpr void init() noexcept
       {
-        allocated.init(block_size);
-        committed.init(block_size);
-        reserved.init(block_size);
-        consumed.init(block_size);
+        if constexpr (!IsSingleProducer)
+        {
+          // this->template Prod<false>::
+          allocated.init(block_size);
+        }
+        this->committed.init(block_size);
+        if constexpr (!IsSingleConsumer)
+        {
+          // this->template Cons<false>::
+          reserved.init(block_size);
+        }
+        this->consumed.init(block_size);
       }
 
 #ifndef DEBUG
@@ -275,19 +332,36 @@ namespace snmalloc
         std::ostream& out = std::cout,
         [[maybe_unused]] size_t groupsize = block_size) const
       {
-        MetaCursor allocate = allocated.load();
-        MetaCursor commit = committed.load();
-        MetaCursor reserve = reserved.load();
-        MetaCursor consume = consumed.load();
+        MetaCursor commit = this->committed.load();
+        if constexpr (!IsSingleProducer)
+        {
+          MetaCursor allocate = this->allocated.load();
+          out << "allocated: " << allocate.meta.ptr << "[" << allocate.meta.ver
+              << "]\n";
+          out << "committed: " << commit.meta.ptr << "[" << commit.meta.ver
+              << "]\n";
+        }
+        else
+        {
+          out << "committed: " << commit.meta.ptr << "[" << commit.meta.ver
+              << "]\n";
+        }
 
-        out << "allocated: " << allocate.meta.ptr << "[" << allocate.meta.ver
-            << "]\n";
-        out << "committed: " << commit.meta.ptr << "[" << commit.meta.ver
-            << "]\n";
-        out << "reserved: " << reserve.meta.ptr << "[" << reserve.meta.ver
-            << "]\n";
-        out << "consumed: " << consume.meta.ptr << "[" << consume.meta.ver
-            << "]\n";
+        MetaCursor consume = this->consumed.load();
+        if constexpr (!IsSingleConsumer)
+        {
+          MetaCursor reserve = this->reserved.load();
+          out << "reserved: " << reserve.meta.ptr << "[" << reserve.meta.ver
+              << "]\n";
+          out << "consumed: " << consume.meta.ptr << "[" << consume.meta.ver
+              << "]\n";
+        }
+        else
+        {
+          out << "consumed: " << consume.meta.ptr << "[" << consume.meta.ver
+              << "]\n";
+        }
+
 #  ifndef _BATCHED_BBQ_
         for (size_t i = 0; i < block_size; ++i)
         {
@@ -322,8 +396,10 @@ namespace snmalloc
 #endif
     };
 
-    alignas(CACHELINE_SIZE) Head phead{};
-    alignas(CACHELINE_SIZE) Head chead{};
+    alignas(CACHELINE_SIZE)
+      stl::conditional_t<IsSingleProducer, MetaHead, Head> phead{};
+    alignas(CACHELINE_SIZE)
+      stl::conditional_t<IsSingleConsumer, MetaHead, Head> chead{};
     alignas(CACHELINE_SIZE) Block blocks_[block_num]{};
 
   public:
@@ -348,10 +424,29 @@ namespace snmalloc
       }
     }
 
+    SNMALLOC_FAST_PATH const char* queue_mode()
+    {
+      if constexpr (IsSingleProducer && IsSingleConsumer)
+        return "spsc";
+      if constexpr (IsSingleProducer && !IsSingleConsumer)
+        return "spmc";
+      if constexpr (!IsSingleProducer && IsSingleConsumer)
+        return "mpsc";
+      return "mpmc";
+    }
+
     Queuestatus enq([[maybe_unused]] T data)
     {
     again:
-      MetaHead ph = phead.load();
+      MetaHead ph{};
+      if constexpr (IsSingleProducer)
+      {
+        ph = phead;
+      }
+      else
+      {
+        ph = phead.load();
+      }
       Block& blk = blocks_[ph.meta.ptr];
       MetaCursor cursor{};
       switch (allocate_entry(blk, cursor))
@@ -386,7 +481,15 @@ namespace snmalloc
     Queuestatus deq([[maybe_unused]] T& data)
     {
     again:
-      MetaHead ch = chead.load();
+      MetaHead ch{};
+      if constexpr (IsSingleConsumer)
+      {
+        ch = chead;
+      }
+      else
+      {
+        ch = chead.load();
+      }
       Block& blk = blocks_[ch.meta.ptr];
       MetaCursor cursor{};
       switch (reserve_entry(blk, cursor))
@@ -454,8 +557,24 @@ namespace snmalloc
 #  endif
     std::ostream& dump(std::ostream& out = std::cout) const
     {
-      MetaHead p = phead.load();
-      MetaHead c = chead.load();
+      MetaHead p{};
+      if constexpr (IsSingleProducer)
+      {
+        p = phead;
+      }
+      else
+      {
+        p = phead.load();
+      }
+      MetaHead c{};
+      if constexpr (IsSingleConsumer)
+      {
+        c = chead;
+      }
+      else
+      {
+        c = chead.load();
+      };
       out << "\033[31mphead: " << p.meta.ptr << "[" << p.meta.ver << "]\n"
           << "chead: " << c.meta.ptr << "[" << c.meta.ver << "]\n\033[0m";
 
@@ -473,13 +592,12 @@ namespace snmalloc
     SNMALLOC_FAST_PATH uint64_t
     fetch_max(stl::Atomic<uint64_t>& old, uint64_t val)
     {
-#if defined(__ARM_ARCH_8A) && defined(__aarch64__) && \
-  defined(__ARM_FEATURE_ATOMICS)
+#if defined(__aarch64__) && (__ARM_ARCH >= 8) && defined(__ARM_FEATURE_ATOMICS)
       /*memory_order: acq_rel || seq_cst*/
       uint64_t prev;
-      __asm__ __volatile__("ldumaxal %0,%2,[%1]"
-                           : "=&r"(prev)
-                           : "r"(&old), "r"(val)
+      __asm__ __volatile__("ldumaxal %1,%0,[%2]"
+                           : "=r"(prev)
+                           : "r"(val), "r"(&old)
                            :);
       return prev;
 #else
@@ -507,77 +625,127 @@ namespace snmalloc
 
     SNMALLOC_FAST_PATH Blockstate allocate_entry(Block& blk, MetaCursor& cursor)
     {
-      MetaCursor cur = blk.allocated.load();
-      if (cur.meta.ptr >= block_size)
+      if constexpr (!IsSingleProducer)
       {
-        return Blockstate::BLOCK_DONE;
+        MetaCursor cur = blk.allocated.load();
+        if (cur.meta.ptr >= block_size)
+        {
+          return Blockstate::BLOCK_DONE;
+        }
+        MetaCursor old = blk.allocated.fetch_add(1);
+        if (old.meta.ptr >= block_size)
+        {
+          return Blockstate::BLOCK_DONE;
+        }
+        cursor = old;
       }
-      MetaCursor old = blk.allocated.fetch_add(1);
-      if (old.meta.ptr >= block_size)
+      else
       {
-        return Blockstate::BLOCK_DONE;
+        MetaCursor committed = blk.committed.load();
+        if (committed.meta.ptr >= block_size)
+        {
+          return Blockstate::BLOCK_DONE;
+        }
+        cursor = committed;
       }
-      cursor = old;
       return Blockstate::ALLOCATED;
     }
 
     SNMALLOC_FAST_PATH Blockstate reserve_entry(Block& blk, MetaCursor& cursor)
     {
-    again:
-      MetaCursor reserved = blk.reserved.load();
-      if (reserved.meta.ptr < block_size)
+      if constexpr (!IsSingleConsumer)
       {
-        MetaCursor committed = blk.committed.load();
-        if (reserved.meta.ptr == committed.meta.ptr)
+      again:
+        MetaCursor reserved = blk.reserved.load();
+        if (reserved.meta.ptr < block_size)
         {
-          return Blockstate::NO_ENTRY;
-        }
-        if (committed.meta.ptr != block_size)
-        {
-          MetaCursor allocated = blk.allocated.load();
-          if (allocated.meta.ptr != committed.meta.ptr)
+          MetaCursor committed = blk.committed.load();
+          if (reserved.meta.ptr == committed.meta.ptr)
           {
-            return Blockstate::NOT_AVAILABLE;
+            return Blockstate::NO_ENTRY;
+          }
+          if constexpr (!IsSingleProducer)
+          {
+            if (committed.meta.ptr != block_size)
+            {
+              MetaCursor allocated = blk.allocated.load();
+              if (allocated.meta.ptr != committed.meta.ptr)
+              {
+                return Blockstate::NOT_AVAILABLE;
+              }
+            }
+          }
+          if (fetch_max(blk.reserved.raw, reserved.val + 1) == reserved.val)
+          {
+            cursor = reserved;
+            return Blockstate::RESERVED;
+          }
+          else
+          {
+            goto again;
           }
         }
-        if (fetch_max(blk.reserved.raw, reserved.val + 1) == reserved.val)
+        cursor = reserved;
+        return Blockstate::BLOCK_DONE;
+      }
+      else
+      {
+        MetaCursor consumed = blk.consumed.load();
+        if (consumed.meta.ptr < block_size)
         {
-          cursor = reserved;
+          MetaCursor committed = blk.committed.load();
+          if (consumed.meta.ptr == committed.meta.ptr)
+          {
+            return Blockstate::NO_ENTRY;
+          }
+          if constexpr (!IsSingleProducer)
+          {
+            if (committed.meta.ptr != block_size)
+            {
+              MetaCursor allocated = blk.allocated.load();
+              if (allocated.meta.ptr != committed.meta.ptr)
+              {
+                return Blockstate::NOT_AVAILABLE;
+              }
+            }
+          }
+          cursor = consumed;
           return Blockstate::RESERVED;
         }
-        else
-        {
-          goto again;
-        }
+        cursor = consumed;
+        return Blockstate::BLOCK_DONE;
       }
-      cursor = reserved;
-      return Blockstate::BLOCK_DONE;
     }
 
     SNMALLOC_FAST_PATH Blockstate advance_phead(const MetaHead& head)
     {
-      // MetaHead head = ph.load();
-      ///*there should be a pre-check before advancing phead, which is not
-      // * metioned in the paper's description, otherwise it will cause some
-      // * potential `false advancing` in muli producer, low I/O contention
-      // * scenario */
-      // if (blocks_[head.meta.ptr].allocated.load().meta.ptr < block_size)
-      //{
-      //  return Blockstate::SUCCESS;
-      //}
       Block& nextblock = blocks_[(head.meta.ptr + 1) % block_num];
 #if defined(RETRY_NEW)
       MetaCursor consumed = nextblock.consumed.load();
-      if (
-        consumed.meta.ver < head.meta.ver ||
-        (consumed.meta.ver == head.meta.ver && consumed.meta.ptr != block_size))
+      if constexpr (!IsSingleConsumer)
       {
-        MetaCursor reserved = nextblock.reserved.load();
-        if (reserved.meta.ptr == consumed.meta.ptr)
+        if (
+          consumed.meta.ver < head.meta.ver ||
+          (consumed.meta.ver == head.meta.ver &&
+           consumed.meta.ptr != block_size))
         {
-          return Blockstate::NO_ENTRY;
+          MetaCursor reserved = nextblock.reserved.load();
+          if (reserved.meta.ptr == consumed.meta.ptr)
+          {
+            return Blockstate::NO_ENTRY;
+          }
+          else
+          {
+            return Blockstate::NOT_AVAILABLE;
+          }
         }
-        else
+      }
+      else
+      {
+        if (
+          consumed.meta.ver < head.meta.ver ||
+          (consumed.meta.ver == head.meta.ver &&
+           consumed.meta.ptr != block_size))
         {
           return Blockstate::NOT_AVAILABLE;
         }
@@ -593,23 +761,21 @@ namespace snmalloc
 
       Raw reset = cursorVal(head.meta.ver + 1);
       fetch_max(nextblock.committed.raw, reset);
-      fetch_max(nextblock.allocated.raw, reset);
-      fetch_max(phead.raw, head.val + 1);
+      if constexpr (!IsSingleProducer)
+      {
+        fetch_max(nextblock.allocated.raw, reset);
+        fetch_max(phead.raw, head.val + 1);
+      }
+      else
+      {
+        phead.init(head.val + 1);
+      }
       return Blockstate::SUCCESS;
     }
 
     SNMALLOC_FAST_PATH bool advance_chead(
       const MetaHead& head, [[maybe_unused]] const MetaCursor& cursor)
     {
-      // MetaHead head = ch.load();
-      ///*there should be a pre-check before advancing phead, which is not
-      // * metioned in the paper's description, otherwise it will cause some
-      // * potential `false advancing` in muli consumer, low I/O contention
-      // * scenario */
-      // if (blocks_[head.meta.ptr].reserved.load().meta.ptr < block_size)
-      //{
-      //  return true;
-      //}
       Block& nextblock = blocks_[(head.meta.ptr + 1) % block_num];
       MetaCursor committed = nextblock.committed.load();
 #if defined(RETRY_NEW)
@@ -619,7 +785,10 @@ namespace snmalloc
       }
       Raw reset = cursorVal(head.meta.ver + 1);
       fetch_max(nextblock.consumed.raw, reset);
-      fetch_max(nextblock.reserved.raw, reset);
+      if constexpr (!IsSingleConsumer)
+      {
+        fetch_max(nextblock.reserved.raw, reset);
+      }
 #elif defined(DROP_OLD)
       if (
         committed.meta.ver <
@@ -627,10 +796,20 @@ namespace snmalloc
       {
         return false;
       }
-      Raw reset = cursorVal(committed.meta.ver);
-      fetch_max(nextblock.reserved.raw, reset);
+      if constexpr (!IsSingleConsumed)
+      {
+        Raw reset = cursorVal(committed.meta.ver);
+        fetch_max(nextblock.reserved.raw, reset);
+      }
 #endif
-      fetch_max(chead.raw, head.val + 1);
+      if constexpr (!IsSingleConsumer)
+      {
+        fetch_max(chead.raw, head.val + 1);
+      }
+      else
+      {
+        chead.init(head.val + 1);
+      }
       return true;
     }
 
@@ -727,13 +906,22 @@ namespace snmalloc
 
                          << ss.str();
           this->log_file.flush();
+          this->log_file.close();
         }
 #  endif
       }
     };
 
     friend std::ostream& operator<<(
-      std::ostream& out, const BBQ<T, block_num, block_size, Key, Key_tweak>& q)
+      std::ostream& out,
+      const BBQ<
+        T,
+        block_num,
+        block_size,
+        IsSingleProducer,
+        IsSingleConsumer,
+        Key,
+        Key_tweak>& q)
     {
       out << "Queue status:\n";
       std::lock_guard<std::mutex> lk(log_mutex);
@@ -744,7 +932,14 @@ namespace snmalloc
 
     friend std::ostream& operator<<(
       std::ostream& out,
-      const typename BBQ<T, block_num, block_size, Key, Key_tweak>::Block b)
+      const typename BBQ<
+        T,
+        block_num,
+        block_size,
+        IsSingleProducer,
+        IsSingleConsumer,
+        Key,
+        Key_tweak>::Block b)
     {
       std::lock_guard<std::mutex> lk(log_mutex);
       b.dump(out);

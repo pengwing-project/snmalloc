@@ -1,7 +1,5 @@
-#ifdef DEBUG
-#  define DUMP
-#  define LOGFILE
-#endif
+#define LOGFILE
+#define DUMP
 #include "snmalloc/mem/message_bbq.h"
 
 #include "snmalloc/backend/globalconfig.h"
@@ -65,7 +63,7 @@ static std::unordered_map<address_t, int> enq_item_count;
 void signal_handler(int)
 {
 #  ifdef DUMP
-  q.dump();
+  messageq.dump();
 #  else
   std::cout << messageq;
 #  endif
@@ -210,6 +208,7 @@ void reader(int id)
   // log << q;
 }
 
+#ifdef TEST_BBQ_CHECK_ENTRIES
 void check(size_t iterations)
 {
   if (
@@ -234,6 +233,7 @@ void check(size_t iterations)
   }
   log << "\033[4;42menq/deq matched\n\033[0m";
 }
+#endif
 
 int main()
 {
